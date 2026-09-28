@@ -2,7 +2,7 @@
 
 **Clantag Studio** is a Lua script for Fatality that gives you a dedicated, polished workspace for animated clantags and in-server name customization.
 
-> Changes are made in-game only. Your Steam profile name is not changed.
+https://youtu.be/m8qefUaWU64
 
 ## Highlights
 
