@@ -2,7 +2,9 @@
 
 **Clantag Studio** is a Lua script for Fatality that gives you a dedicated, polished workspace for animated clantags and in-server name customization.
 
-[![Watch the video](https://img.youtube.com/vi/m8qefUaWU64/maxresdefault.jpg)](https://www.youtube.com/watch?v=m8qefUaWU64)
+[![Clantag Studio Showcase](https://img.youtube.com/vi/m8qefUaWU64/maxresdefault.jpg)](https://www.youtube.com/watch?v=m8qefUaWU64)
+
+<sub><sup>Showcase: <a href="https://www.youtube.com/watch?v=m8qefUaWU64">Watch on YouTube</a></sup></sub>
 
 -> features
 
