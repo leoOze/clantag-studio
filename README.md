@@ -1,10 +1,10 @@
-# Clantag Studio
+
 
 **Clantag Studio** is a Lua script for Fatality that gives you a dedicated, polished workspace for animated clantags and in-server name customization.
 
-https://www.youtube.com/watch?v=m8qefUaWU64
+[![Watch the video](https://img.youtube.com/vi/m8qefUaWU64/maxresdefault.jpg)](https://www.youtube.com/watch?v=m8qefUaWU64)
 
-## Highlights
+-> features
 
 - **Animated clantags** — turn any short text into a live clantag animation.
 - **Eight animation styles** — Type / erase, Marquee, Back and forth, Scanner, Glitch, Center outward, Static, and HVHRAT Portal.
@@ -17,15 +17,15 @@ https://www.youtube.com/watch?v=m8qefUaWU64
 - **Built-in presets** — quickly load `fatality`, `hvhrat`, or `specter` themed configurations.
 - **Safety checks** — validates the game name setting, avoids unsafe input, and stops cleanly when the game rejects a name update.
 
-## Installation
+-> tutorial
 
-1. Download `clantag-studio.lua`.
-2. Load it through Fatality’s Lua menu.
+1  Load it through Fatality’s Lua menu.
+2. Allow unsafe scripts
 3. Open the **Clantag Studio** tab.
 4. Choose your text, animation, letter case, and speed.
 5. Select **Apply text and effects**.
 
-## Sharing a preset
+-> sharing a preset
 
 1. Configure the clantag exactly how you want it.
 2. Select **Copy clantag** to generate a `CT2` code.
@@ -34,17 +34,16 @@ https://www.youtube.com/watch?v=m8qefUaWU64
 
 The code includes the clantag text, animation style, letter-case effect, direction, and timing.
 
-## Notes
+## notes
 
 - The script is intended for **Fatality**.
 - Keep only one name-changing Lua active at a time.
 - After Counter-Strike updates, offsets may need to be updated before name changes work again.
 - The script keeps the animated prefix separate from your saved in-game nickname, so you can restore your original name easily.
 
-## Roadmap
 
 **Clantag Stealer — coming soon.**
 
 ---
 
-Coded by **$ky**.
+by **$ky** (01 br hvh bo$$)
