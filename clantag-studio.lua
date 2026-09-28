@@ -1,11 +1,12 @@
 -- Clantag Studio 2.1 - dedicated tab and Undercover-setter.
--- Native layout verified against the installed tier0.dll (timestamp 1788980629).
+-- Native layout verified against the installed tier0.dll (timestamp 1790023707).
 -- Unknown builds fail closed. All foreign memory is copied through Win32.
 -- Do not run multiple name changers concurrently.
 
 local ffi = ffi
 local config = {
     enabled = true,
+    bold = false, style = 0,
     undercover_enabled = false, undercover_name = '',
     interval = 0.8,
     confirmation_timeout = 5.0,
@@ -23,7 +24,7 @@ local function guarded(name,fn)
     return function(...)
         if runtime.closed or runtime.halted then return end
         if runtime.busy then
-            if ui.syncing and name=='menu: ativar' then return end
+            if ui.syncing and name:sub(1,5)=='menu:' then return end
             runtime.halted=true
             print('[Clantag Studio] Callback stopped at: '..runtime.stage..'. Reload and send this line.')
             return
@@ -38,7 +39,8 @@ local state = {
     original = nil, confirmed = nil, pending = nil,
     frame = 1, next_update = 0, deadline = 0, last_time = 0,
     fallback_sent = false,
-    blocked = false, connected = false, message = nil, saw_confirmation = false
+    blocked = false, connected = false, message = nil, saw_confirmation = false,
+    stealer_enabled = false, stealer_name = nil, stealer_index = 0, stealer_next_time = 0
 }
 
 local function report(message)
@@ -81,7 +83,7 @@ local function initialize_native()
     end
 
     -- Build and instruction checks BEFORE applying any layout offsets.
-    local base = factory - 0x20AE70
+    local base = factory - 0x20E8E0
     local dos = read(base, 64)
     if not dos or ffi.string(dos, 2) ~= 'MZ' then return false, 'Unrecognized tier0 base.' end
     local pe_offset = number(dos, 0x3C, 'uint32_t')
@@ -89,17 +91,17 @@ local function initialize_native()
     local pe = read(base + pe_offset, 0x60)
     if not pe or ffi.string(pe, 4) ~= 'PE\0\0'
         or number(pe, 4, 'uint16_t') ~= 0x8664
-        or number(pe, 8, 'uint32_t') ~= 1788980629
-        or number(pe, 0x50, 'uint32_t') ~= 0x3FA000 then
+        or number(pe, 8, 'uint32_t') ~= 1790023707
+        or number(pe, 0x50, 'uint32_t') ~= 0x401000 then
         return false, 'Build de tier0 diferente da validada; atualize os offsets antes de usar.'
     end
-    if not matches(factory, '\x4C\x8B\x0D\x29\x80\x19\x00')
-        or not matches(base + 0x685A0, '\x48\x8D\x05\x49\xCF\x33\x00\xC3') then
+    if not matches(factory, '\x4C\x8B\x0D\xA9\xB7\x19\x00')
+        or not matches(base + 0x685A0, '\x48\x8D\x05\xC9\x40\x34\x00\xC3') then
         return false, 'Interface code changed; initialization cancelled.'
     end
 
     -- Read registration nodes; never call an unknown fnCreate or vtable slot.
-    local head = read(base + 0x3A2EA0, 8)
+    local head = read(base + 0x3AA090, 8)
     if not head then return false, 'Interface list unreadable.' end
     local node, seen, found = number(head, 0, 'uint64_t'), {}, false
     for _ = 1, 256 do
@@ -118,9 +120,9 @@ local function initialize_native()
         node = number(entry, 16, 'uint64_t')
     end
     if not found then return false, 'VEngineCvar007 not found.' end
-    local object = base + 0x3A54F0 -- decoded from the verified LEA above
+    local object = base + 0x3AC670 -- decoded from the verified LEA above
     local header = read(object, 0x68)
-    if not header or number(header, 0, 'uint64_t') ~= base + 0x30DF48 then
+    if not header or number(header, 0, 'uint64_t') ~= base + 0x313208 then
         return false, 'Unrecognized CCvar instance.'
     end
     -- Current build: list at +0x48, storage at +0x50, head at +0x58.
@@ -201,10 +203,48 @@ local function clean(value, limit)
     return result
 end
 
+local function original_name_issue(value)
+    if #value > 128 then return 'nickname exceeds 128 bytes' end
+    if value:find('[";\\]') then return 'nickname contains a console command delimiter' end
+    if value:find('%c') then return 'nickname contains a control character' end
+    if clean(value, 128) ~= value then return 'nickname contains invalid UTF-8 bytes' end
+    return nil
+end
+
+local function utf8_cp(cp)
+    if cp < 0x80 then return string.char(cp) end
+    if cp < 0x800 then return string.char(0xC0+math.floor(cp/64),0x80+cp%64) end
+    if cp < 0x10000 then return string.char(0xE0+math.floor(cp/4096),0x80+math.floor(cp/64)%64,0x80+cp%64) end
+    return string.char(0xF0+math.floor(cp/262144),0x80+math.floor(cp/4096)%64,0x80+math.floor(cp/64)%64,0x80+cp%64)
+end
+local function to_bold(text)
+    return (text:gsub('[A-Za-z0-9]',function(ch)
+        local b=ch:byte()
+        if b>=65 and b<=90 then return utf8_cp(0x1D5D4+b-65) end
+        if b>=97 and b<=122 then return utf8_cp(0x1D5EE+b-97) end
+        return utf8_cp(0x1D7EC+b-48)
+    end))
+end
+local small_caps = {
+    a='ᴀ',b='ʙ',c='ᴄ',d='ᴅ',e='ᴇ',f='ꜰ',g='ɢ',h='ʜ',i='ɪ',j='ᴊ',k='ᴋ',l='ʟ',
+    m='ᴍ',n='ɴ',o='ᴏ',p='ᴘ',q='q',r='ʀ',s='ꜱ',t='ᴛ',u='ᴜ',v='ᴠ',w='ᴡ',x='x',y='ʏ',z='ᴢ'
+}
+local superscript = {
+    a='ᵃ',b='ᵇ',c='ᶜ',d='ᵈ',e='ᵉ',f='ᶠ',g='ᵍ',h='ʰ',i='ᶦ',j='ʲ',k='ᵏ',l='ˡ',
+    m='ᵐ',n='ⁿ',o='ᵒ',p='ᵖ',q='q',r='ʳ',s='ˢ',t='ᵗ',u='ᵘ',v='ᵛ',w='ʷ',x='ˣ',y='ʸ',z='ᶻ'
+}
+local styles = {'Normal','Bold','Small Caps','Superscript'}
+local function stylize(text, style)
+    if style==1 then return to_bold(text) end
+    local map=style==2 and small_caps or style==3 and superscript or nil
+    if not map then return text end
+    return (text:gsub('[A-Za-z]',function(ch) return map[ch:lower()] or ch end))
+end
 local function compose_name(tag, original)
     -- Preserve the captured nickname; shorten only the animated prefix.
     local budget = 32 - #original - 1
     if budget < 1 then return original end
+    tag=stylize(tag,config.style)
     local prefix = clean(tag, budget):gsub('^%s+', ''):gsub('%s+$', '')
     if prefix == '' or prefix == '.' then return original end
     return prefix .. ' ' .. original
@@ -292,17 +332,23 @@ local function checksum(s)
 end
 local function encode(c)
     local hex=c.text:gsub('.',function(ch) return string.format('%02X',ch:byte()) end)
-    local body=table.concat({'CT2',c.mode,c.casing,c.reverse and 1 or 0,math.floor(c.interval*1000+0.5),hex},':')
+    local style=c.style
+    if style==nil then style=c.bold and 1 or 0 end
+    local body=table.concat({'CT2',c.mode,c.casing,c.reverse and 1 or 0,math.floor(c.interval*1000+0.5),hex,style},':')
     return body..':'..checksum(body)
 end
 local function decode(code)
     if type(code)~='string' or #code>180 then return nil,'Code too long or invalid.' end
     code=code:gsub('^%s+',''):gsub('%s+$','')
-    local m,c,r,ms,hex,sum=code:match('^CT2:(%d):(%d):([01]):(%d+):([%x]+):(%x%x%x%x%x%x%x%x)$')
+    local m,c,r,ms,hex,style,sum=code:match('^CT2:(%d):(%d):([01]):(%d+):([%x]+):([0-3]):(%x%x%x%x%x%x%x%x)$')
+    if not m then
+        m,c,r,ms,hex,sum=code:match('^CT2:(%d):(%d):([01]):(%d+):([%x]+):(%x%x%x%x%x%x%x%x)$')
+        style='0'
+    end
     if not m then return nil,'Invalid format; expected CT2.' end
     if checksum(code:sub(1,-10))~=sum:upper() then return nil,'Incorrect checksum; code is incomplete or changed.' end
     m,c,ms=tonumber(m),tonumber(c),tonumber(ms)
-    if not modes[m] or not cases[c] or ms<500 or ms>3000 or ms%100~=0 or #hex%2~=0 or #hex>48 then
+    if not modes[m] or not cases[c] or ms<50 or ms>3000 or ms%10~=0 or #hex%2~=0 or #hex>48 then
         return nil,'Configuration out of range.'
     end
     local text=hex:gsub('%x%x',function(pair) return string.char(tonumber(pair,16)) end)
@@ -316,7 +362,8 @@ local function decode(code)
             return nil,'Text is not valid UTF-8.'
         end
     end
-    return {text=text,mode=m,casing=c,reverse=r=='1',interval=ms/1000}
+    style=tonumber(style)
+    return {text=text,mode=m,casing=c,reverse=r=='1',interval=ms/1000,style=style,bold=style==1}
 end
 
 local clock = {}
@@ -350,7 +397,27 @@ local function set_undercover(value, enabled)
     return true
 end
 local function base_name(original)
+    if state.stealer_enabled and state.stealer_name then return state.stealer_name end
     return config.undercover_enabled and config.undercover_name or original
+end
+
+local function teammate_names()
+    local names={}
+    if not entities or not entities.controllers or not entities.controllers.ForEach then return names end
+    local me=entities.GetLocalController and entities.GetLocalController()
+    local my_id=me and me.GetStringSteamID and me:GetStringSteamID()
+    entities.controllers:ForEach(function(entry)
+        local player=entry and entry.entity
+        if not player or not player.IsEnemy or player:IsEnemy() or not player.GetName then return end
+        local name=clean(player:GetName(),24):gsub('^%s+',''):gsub('%s+$','')
+        local id=player.GetStringSteamID and player:GetStringSteamID()
+        local is_me=player==me or (my_id and id and my_id~='' and id~='' and my_id==id)
+        if not is_me and name:find('%S') then
+            names[#names+1]=name
+        end
+    end)
+    table.sort(names)
+    return names
 end
 
 local function save()
@@ -379,7 +446,7 @@ local function build_menu()
         if item then ui.keep[#ui.keep+1]=item end
         return item
     end
-    local edit,share,undercover
+    local edit,share,undercover,stealer
     local icon=draw and draw.textures and draw.textures['gui_icon_down']
     if icon and gui.GetMainWindow and gui.TabLayoutMode and gui.GroupWidthMode
         and gui.GroupWidthMode.FULL~=nil then
@@ -392,7 +459,8 @@ local function build_menu()
                 stage('menu: tab groups')
                 edit=keep(gui.Group('clantag_studio_animation_v21','Animated clantag',440,gui.GroupWidthMode.FULL))
                 share=keep(gui.Group('clantag_studio_share_v21','Presets and sharing',360,gui.GroupWidthMode.FULL))
-                undercover=keep(gui.Group('clantag_studio_undercover_v21','Undercover-setter',220,gui.GroupWidthMode.FULL))
+                undercover=keep(gui.Group('clantag_studio_undercover_v21','Name Stealer / Undercover',320,gui.GroupWidthMode.FULL))
+                stealer=undercover
                 tab:Add(edit);tab:Add(share);tab:Add(undercover)
                 ui.menu_path='Clantag Studio'
             end
@@ -402,6 +470,7 @@ local function build_menu()
         edit=keep(gui.ctx:Find('lua>elements a'))
         share=keep(gui.ctx:Find('lua>elements b'))
         undercover=share
+        stealer=share
         ui.menu_path='Lua > Elements A/B (tab unavailable)'
     end
     if not edit or not share or not undercover then
@@ -443,11 +512,13 @@ local function build_menu()
         edit:Add(keep(gui.Label('clantag_studio_author_v21','coded by $ky')))
     end
     ui.enabled=control(edit,'enabled','Enable animated clantag','checkbox')
+    ui.style=combo('style','Text style',styles)
+    ui.style.tooltip='Applies only to animated frames. Undercover name stays plain. Unicode styles may be shortened by the CS2 name byte limit.'
     ui.text=control(edit,'text','Custom text (24 bytes)','text_input')
     ui.text.tooltip='Edit the text and choose a preset effect. Lua code is not accepted. Trailing spaces are part of the marquee.'
     ui.mode=combo('mode','Animation',modes)
     ui.casing=combo('case','Letter case',cases)
-    ui.speed=control(edit,'speed','Frame interval (ms)','slider',500,3000,{'%.0f'},100)
+    ui.speed=control(edit,'speed','Frame interval (ms)','slider',50,3000,{'%.0f'},10)
     ui.direction=control(edit,'direction','Reverse direction','checkbox')
     -- No dynamic native labels or tab:Reset; retain all native menu objects.
     local function populate()
@@ -455,7 +526,7 @@ local function build_menu()
         stage('menu: text and enabled values')
         ui.enabled:SetValue(config.enabled);ui.text:SetValue(config.text)
         stage('menu: combo values')
-        select(ui.mode,config.mode);select(ui.casing,config.casing)
+        select(ui.mode,config.mode);select(ui.casing,config.casing);select(ui.style,config.style+1)
         stage('menu: slider value')
         ui.speed:GetValue():Set(config.interval*1000);ui.speed:Reset()
         ui.direction:SetValue(config.reverse)
@@ -464,20 +535,26 @@ local function build_menu()
     ui.populate=populate
     local function from_menu()
         local text=clean(ui.text.value,24)
-        local c={text=text,mode=selected(ui.mode,#modes),casing=selected(ui.casing,#cases),reverse=ui.direction:GetValue():Get(),
-            interval=math.floor(ui.speed:GetValue():Get()/100+0.5)/10}
+        local c={text=text,mode=selected(ui.mode,#modes),casing=selected(ui.casing,#cases),reverse=ui.direction:GetValue():Get(),style=selected(ui.style,#styles)-1,
+            interval=math.floor(ui.speed:GetValue():Get()/10+0.5)/100}
         if not apply(c,true) then return false end
         ui.text:SetValue(config.text)
-        report('Configuration applied and saved.');return true
+        report('Configuration applied and saved. Text style: '..styles[config.style+1]..'.');return true
     end
     button(edit,'apply','Apply text and effects',from_menu)
+    -- A style choice must take effect without requiring the separate Apply button.
+    -- Keep populate() silent so loading a saved configuration cannot re-enter UI callbacks.
+    ui.style:AddCallback(guarded('menu: style',function()
+        if ui.syncing then return end
+        from_menu()
+    end))
     button(edit,'reverse','Reverse direction',function()
         if not from_menu() then return end
         config.reverse=not config.reverse;frames=compile(config);save();populate()
         report(config.reverse and 'Direction reversed.' or 'Normal direction.')
     end)
     local function preset(text,mode,casing)
-        apply({text=text,mode=mode,casing=casing,reverse=false,interval=0.8},true)
+        apply({text=text,mode=mode,casing=casing,reverse=false,interval=0.8,style=config.style},true)
         populate();report('Preset applied: '..text)
     end
     button(share,'fatality','fatality ',function() preset('fatality ',2,1) end)
@@ -500,9 +577,14 @@ local function build_menu()
     end)
     button(share,'status','Show status in console',function()
         print('[Clantag Studio] '..(state.message or 'Waiting for game.'))
+        print('[Clantag Studio] Text style: '..styles[config.style+1])
+        print('[Clantag Studio] Styled sample: '..stylize(config.text,config.style))
+        print('[Clantag Studio] Name sample: '..compose_name(config.text,base_name(state.original or 'Player')))
         print('[Clantag Studio] Direction: '..(config.reverse and 'reversed' or 'normal'))
         print('[Clantag Studio] Preview: '..table.concat(frames,' | ',1,math.min(#frames,12)))
     end)
+    ui.stealer=control(stealer,'stealer_enabled','Name Stealer: auto-rotate teammates (500 ms)','checkbox')
+    ui.stealer:SetValue(false)
     ui.undercover=control(undercover,'undercover_name','Custom static name (24 bytes)','text_input')
     ui.undercover:SetValue(config.undercover_name)
     button(undercover,'undercover_apply','Apply Undercover name',function()
@@ -515,6 +597,29 @@ local function build_menu()
         set_undercover(config.undercover_name,false)
         save();report('Original name selected; clantag settings remain unchanged.')
     end)
+    ui.stealer:AddCallback(guarded('menu: name stealer',function()
+        local enabled=ui.stealer:GetValue():Get()
+        local team_count=0
+        if enabled then
+            local names=teammate_names()
+            if #names==0 then
+                ui.syncing=true;ui.stealer:SetValue(false);ui.syncing=false
+                report('No teammate available. Join a match before enabling Name Stealer.');return
+            end
+            team_count=#names
+            state.stealer_index=1;state.stealer_name=names[1]
+            state.stealer_next_time=draw.GetTime()+0.5
+        else
+            state.stealer_name=nil;state.stealer_index=0;state.stealer_next_time=0
+        end
+        state.stealer_enabled=enabled
+        -- Turning this off returns to the captured original, not Undercover.
+        config.undercover_enabled=false
+        state.next_update=0;state.disable_restore_sent=false
+        save()
+        report(enabled and ('Name Stealer rotating '..team_count..' teammates every 500 ms; first: '..state.stealer_name)
+            or 'Name Stealer off; restoring original name.')
+    end))
     -- Set initial values before enabling callbacks.
     populate()
     ui.enabled:AddCallback(guarded('menu: ativar',function()
@@ -524,11 +629,16 @@ local function build_menu()
     stage('menu: group layout')
     edit:Reset();share:Reset()
     if undercover~=share then undercover:Reset() end
+    if stealer~=share and stealer~=undercover then stealer:Reset() end
 end
 
 local function reset_session()
     state.resume_original, state.resume_confirmed, state.resume_pending = state.original, state.confirmed, state.pending
     state.original, state.confirmed, state.pending = nil, nil, nil
+    state.stealer_enabled, state.stealer_name, state.stealer_index, state.stealer_next_time = false, nil, 0, 0
+    if ui.stealer then
+        ui.syncing=true;ui.stealer:SetValue(false);ui.syncing=false
+    end
     state.frame, state.next_update, state.deadline = 1, 0, 0
     state.fallback_sent = false
     state.blocked = false
@@ -546,7 +656,7 @@ local function send_name(name, alternate)
     stage('name: validate flags')
     if not native.ready or not native.valid() then
         state.blocked = true
-        report('name flags changed or became unreadable; command cancelled.')
+        report('Name changer unavailable on this CS2 build; command cancelled.')
         return false
     end
     stage('name: ClientCmd')
@@ -580,7 +690,7 @@ local function update()
     end
     state.connected = true
     if state.blocked then
-        if not config.enabled and not config.undercover_enabled and not state.disable_restore_sent then
+        if not config.enabled and not config.undercover_enabled and not state.stealer_enabled and not state.disable_restore_sent then
             restore();state.disable_restore_sent=true
         end
         return
@@ -592,10 +702,11 @@ local function update()
     local observed = controller:GetName()
     if type(observed) ~= 'string' or observed == '' then return end
     if not state.original then
-        if not config.enabled and not config.undercover_enabled then return end
-        if clean(observed, 128) ~= observed then
+        if not config.enabled and not config.undercover_enabled and not state.stealer_enabled then return end
+        local name_issue = original_name_issue(observed)
+        if name_issue then
             state.blocked = true
-            report('Original name cannot be restored by command; animation stopped.')
+            report('Original name cannot be restored by command ('..name_issue..', '..#observed..' bytes); animation stopped. Set a plain nickname in Steam, reconnect, then reload this Lua.')
             return
         end
         if state.resume_original and (observed == state.resume_confirmed or observed == state.resume_pending) then
@@ -651,6 +762,24 @@ local function update()
         report('Name changed externally; animation stopped to avoid conflict.')
         return
     end
+    if state.stealer_enabled and now>=state.stealer_next_time then
+        local names=teammate_names()
+        if #names==0 then
+            state.stealer_enabled=false;state.stealer_name=nil;state.stealer_index=0
+            config.undercover_enabled=false
+            if ui.stealer then ui.syncing=true;ui.stealer:SetValue(false);ui.syncing=false end
+            report('No teammates remain; restoring original name.')
+        else
+            local current=0
+            for i,name in ipairs(names) do
+                if name==state.stealer_name then current=i;break end
+            end
+            state.stealer_index=current%#names+1
+            state.stealer_name=names[state.stealer_index]
+            state.stealer_next_time=now+0.5
+        end
+        state.next_update=0
+    end
     if now < state.next_update then return end
     -- Always compose from the captured base, never from the animated name.
     local base = base_name(state.original)
@@ -662,7 +791,7 @@ local function update()
     state.pending = desired
     state.fallback_sent = false
     state.deadline = now + config.confirmation_timeout
-    state.next_update = now + 0.5 -- bounded command rate even with fast acknowledgements
+    state.next_update = now + math.max(0.05,config.interval)
     send_name(desired)
 end
 
