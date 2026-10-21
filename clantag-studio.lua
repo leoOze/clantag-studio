@@ -1,4 +1,4 @@
--- Clantag Studio 2.1 - dedicated tab and Undercover-setter.
+-- Clantag Studio 3.0 - animated clantags, presets and identity controls.
 -- Native layout is discovered from tier0 interface instructions and validated
 -- against the public convar API. Unknown layouts fail closed.
 -- Do not run multiple name changers concurrently.
@@ -13,7 +13,7 @@ local config = {
     text = 'fatality ', mode = 2, casing = 1, reverse = false
 }
 local ui = { keep = {}, syncing = false }
-local runtime = { busy=false, halted=false, closed=false, loading=true, stage='start' }
+local runtime = { busy=false, menu_busy=false, halted=false, closed=false, loading=true, stage='start' }
 local function stage(name)
     runtime.stage=name
     if runtime.loading then print('[Clantag Studio] init: '..name) end
@@ -21,10 +21,26 @@ end
 -- Not an exception catcher: if a native callback unwinds before returning,
 -- the NEXT invocation stops instead of repeating the failed operation.
 local function guarded(name,fn)
+    local is_menu=name:sub(1,5)=='menu:' or name:sub(1,6)=='botao:'
     return function(...)
-        if runtime.closed or runtime.halted then return end
+        if runtime.closed then return end
+        if is_menu then
+            -- Programmatic value changes can emit native GUI callbacks. They
+            -- must not latch the game guard or recursively apply menu values.
+            if ui.syncing or runtime.menu_busy then return end
+            -- Keep the menu usable for status/settings after a game callback
+            -- fails. Halt game updates before allowing more menu interaction.
+            if runtime.busy then
+                runtime.halted=true;runtime.busy=false
+                print('[Clantag Studio] Game updates paused at: '..runtime.stage..'. Menu remains available; reload the Lua to resume.')
+            end
+            runtime.menu_busy=true
+            fn(...)
+            runtime.menu_busy=false
+            return
+        end
+        if runtime.halted then return end
         if runtime.busy then
-            if ui.syncing and name:sub(1,5)=='menu:' then return end
             runtime.halted=true
             print('[Clantag Studio] Callback stopped at: '..runtime.stage..'. Reload and send this line.')
             return
@@ -288,6 +304,7 @@ local function chars(text)
     for c in text:gmatch('[%z\1-\127\194-\244][\128-\191]*') do out[#out+1] = c end
     return out
 end
+
 local lower, upper = {}, {}
 local accents_low = chars('áàâãäéèêëíìîïóòôõöúùûüçñ')
 local accents_up = chars('ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ')
@@ -454,7 +471,7 @@ local function save()
     if utils.DbSave then
         stage('config: DbSave')
         if not utils.DbSave({code=encode(config),enabled=config.enabled,
-            undercover_enabled=config.undercover_enabled,undercover_name=config.undercover_name},'clantag_studio_v2') then
+            undercover_enabled=config.undercover_enabled,undercover_name=config.undercover_name},'clantag_studio30_v2') then
             report('Configuration applied, but could not be saved locally.')
         end
     end
@@ -484,15 +501,47 @@ local function build_menu()
         local window=keep(gui.GetMainWindow())
         if window then
         stage('menu: Clantag Studio tab')
-            local tab=keep(window:AddTab('clantag_studio_tab_v21',icon,'Clantag Studio',gui.TabLayoutMode.DEFAULT))
+            local tab=keep(window:AddTab('clantag_studio30_tab_v21',icon,'Clantag Studio 3.0',gui.TabLayoutMode.NONE))
             if tab then
+                ui.tab=tab
                 stage('menu: tab groups')
-                edit=keep(gui.Group('clantag_studio_animation_v21','Animated clantag',440,gui.GroupWidthMode.FULL))
-                share=keep(gui.Group('clantag_studio_share_v21','Presets and sharing',360,gui.GroupWidthMode.FULL))
-                undercover=keep(gui.Group('clantag_studio_undercover_v21','Name Stealer / Undercover',320,gui.GroupWidthMode.FULL))
+                edit=keep(gui.Group('clantag_studio30_animation_v21','\fC9A6FFFFAnimated clantag\b',440,gui.GroupWidthMode.FULL))
+                share=keep(gui.Group('clantag_studio30_share_v21','\fC9A6FFFFPresets and sharing\b',360,gui.GroupWidthMode.FULL))
+                undercover=keep(gui.Group('clantag_studio30_undercover_v21','\fC9A6FFFFName Stealer / Undercover\b',320,gui.GroupWidthMode.FULL))
                 stealer=undercover
                 tab:Add(edit);tab:Add(share);tab:Add(undercover)
-                ui.menu_path='Clantag Studio'
+                -- Two columns: animation and Undercover left, presets right.
+                local groups={edit,share,undercover}
+                for _,group in ipairs(groups) do
+                    group.sizeToParentW,group.sizeToParentH=false,false
+                    group:SetVisible(false)
+                end
+                local last_w,last_h
+                ui.arrange=function()
+                    local size=tab.size
+                    local w,h=size and size.x or 0,size and size.y or 0
+                    if w==last_w and h==last_h then return end
+                    last_w,last_h=w,h
+                    if w<360 or h<240 then
+                        for _,group in ipairs(groups) do group:SetVisible(false) end
+                        return
+                    end
+                    local pad,gap=16,12
+                    local width=math.floor((w-2*pad-gap)/2)
+                    local height=math.floor(h-2*pad)
+                    -- Reserve room for both action buttons in the first box.
+                    local upper=math.min(440,math.floor((height-gap)*0.74))
+                    local lower=height-gap-upper
+                    local function place(group,x,y,gw,gh)
+                        group:SetDimensions(draw.Vec2(x,y),draw.Vec2(gw,gh))
+                        group:Reset();group:SetVisible(true)
+                    end
+                    place(edit,pad,pad,width,upper)
+                    place(undercover,pad,pad+upper+gap,width,lower)
+                    place(share,pad+width+gap,pad,width,height)
+                end
+
+                ui.menu_path='Clantag Studio 3.0'
             end
         end
     end
@@ -509,27 +558,32 @@ local function build_menu()
     end
     local function control(group,id,label,kind,...)
         stage('menu: create '..id)
-        local item,row=gui.MakeControlEasy('clantag_studio_v201_'..id,label,kind,...)
+        local item,row=gui.MakeControlEasy('clantag_studio30_v201_'..id,label,kind,...)
         keep(item);keep(row)
         group:Add(row);return item
     end
     local function button(group,id,label,callback)
         stage('menu: button '..id)
-        local item=keep(gui.Button('clantag_studio_v201_'..id,label))
+        local item=keep(gui.Button('clantag_studio30_v201_'..id,label))
+        item.sizeToParentW=true;item.sizeToParentH=false
         group:Add(item);item:AddCallback(guarded('botao: '..id,callback));return item
     end
-    local function combo(id,label,items)
+    local function combo(id,label,items,group)
         stage('menu: combo '..id)
-        local item=keep(gui.ComboBox('clantag_studio_v201_'..id))
+        local item=keep(gui.ComboBox('clantag_studio30_v201_'..id))
         item.allowMultiple=false
         for i,name in ipairs(items) do
-            item:Add(keep(gui.Selectable('clantag_studio_v201_'..id..i,name)))
+            item:Add(keep(gui.Selectable('clantag_studio30_v201_'..id..i,name)))
         end
-        edit:Add(keep(gui.MakeControl(label,item)))
+        (group or edit):Add(keep(gui.MakeControl(label,item)))
         return item
     end
     local function select(item,index)
-        item:GetValue():Get():SetRaw(2^(index-1))
+        local value=item:GetValue()
+        local bits=value:Get()
+        bits:SetRaw(2^(index-1))
+        value:Set(bits)
+        item:Reset()
     end
     local function selected(item,n)
         local raw=item:GetValue():Get():GetRaw()
@@ -538,8 +592,8 @@ local function build_menu()
     end
     -- Static labels: create once, never call the native SetText path.
     if gui.Label then
-        edit:Add(keep(gui.Label('clantag_studio_build_v21','build: 2.1')))
-        edit:Add(keep(gui.Label('clantag_studio_author_v21','coded by $ky')))
+        edit:Add(keep(gui.Label('clantag_studio30_build_v21','build: 3.0')))
+        edit:Add(keep(gui.Label('clantag_studio30_author_v21','coded by $ky')))
     end
     ui.enabled=control(edit,'enabled','Enable animated clantag','checkbox')
     ui.style=combo('style','Text style',styles)
@@ -550,7 +604,7 @@ local function build_menu()
     ui.casing=combo('case','Letter case',cases)
     ui.speed=control(edit,'speed','Frame interval (ms)','slider',50,3000,{'%.0f'},10)
     ui.direction=control(edit,'direction','Reverse direction','checkbox')
-    -- No dynamic native labels or tab:Reset; retain all native menu objects.
+    -- Retain all native menu objects; finalize layouts once, bottom-up.
     local function populate()
         ui.syncing=true
         stage('menu: text and enabled values')
@@ -607,6 +661,9 @@ local function build_menu()
     end)
     button(share,'status','Show status in console',function()
         print('[Clantag Studio] '..(state.message or 'Waiting for game.'))
+        print('[Clantag Studio] Backend: '..tostring(native.ready)..'; '..tostring(native.reason or 'not initialized'))
+        print('[Clantag Studio] Blocked: '..tostring(state.blocked)..'; halted: '..tostring(runtime.halted)..'; stage: '..tostring(runtime.stage))
+        print('[Clantag Studio] Pending name: '..tostring(state.pending or 'none'))
         print('[Clantag Studio] Text style: '..styles[config.style+1])
         print('[Clantag Studio] Styled sample: '..stylize(config.text,config.style))
         print('[Clantag Studio] Name sample: '..compose_name(config.text,base_name(state.original or 'Player')))
@@ -628,6 +685,7 @@ local function build_menu()
         save();report('Original name selected; clantag settings remain unchanged.')
     end)
     ui.stealer:AddCallback(guarded('menu: name stealer',function()
+        if ui.syncing then return end
         local enabled=ui.stealer:GetValue():Get()
         local team_count=0
         if enabled then
@@ -660,6 +718,9 @@ local function build_menu()
     edit:Reset();share:Reset()
     if undercover~=share then undercover:Reset() end
     if stealer~=share and stealer~=undercover then stealer:Reset() end
+    -- Groups reset their rows; the parent tab must also update group positions
+    -- and hit regions after multiple groups have been attached.
+    if ui.tab then stage('menu: tab layout');ui.tab:Reset() end
 end
 
 local function reset_session()
@@ -706,7 +767,7 @@ local function restore()
     local controller = entities.GetLocalController()
     if not controller then return end
     local observed = controller:GetName()
-    local ours = observed == state.confirmed or observed == state.pending
+    local ours = observed == state.confirmed or observed == state.pending or state.recent_names[observed]~=nil
     if not ours or observed == state.original then return end
     if send_name(state.original) then
         report('Name restoration requested; cannot verify after unloading.')
@@ -714,7 +775,18 @@ local function restore()
 end
 
 local function update()
-    if not native.ready then return end
+    -- Initialization may have happened before the engine/exports were ready.
+    if not native.ready then
+        local now=draw.GetTime()
+        if game.engine:IsConnected() and game.engine:InGame()
+            and (not native.retry_at or now>=native.retry_at or now<native.retry_at-5) then
+            native.retry_at=now+5
+            local ok,reason=initialize_native()
+            native.reason=reason
+            if not ok then report('Name backend unavailable: '..tostring(reason)) end
+        end
+        if not native.ready then return end
+    end
     stage('game: connection')
     local connected = game.engine:IsConnected() and game.engine:InGame()
     if not connected then
@@ -758,6 +830,7 @@ local function update()
     if now < state.last_time then
         state.next_update = now
         state.deadline = now + config.confirmation_timeout
+        for name in pairs(state.recent_names) do state.recent_names[name]=now end
     end
     state.last_time = now
     for name,sent_at in pairs(state.recent_names) do
@@ -790,7 +863,7 @@ local function update()
             report(applied and 'name changed locally, but controller did not confirm it. Server may be ignoring changes; animation stopped.'
                 or 'Both name commands failed, including unrestricted mode. Game rejected the convar change; animation stopped. Unload other name changers and check the game console.')
         end
-        return
+        if state.pending or state.blocked then return end
     end
 
     -- A late server acknowledgement of one of our own commands is not an
@@ -843,7 +916,7 @@ end
 local function initialize()
 stage('config: DbLoad')
 if utils and utils.DbLoad then
-    local saved=utils.DbLoad('clantag_studio_v2')
+    local saved=utils.DbLoad('clantag_studio30_v2')
     if type(saved)=='table' then
         local c=decode(saved.code)
         if c then
@@ -859,6 +932,7 @@ frames=compile(config)
 build_menu()
 stage('backend: validate name convar')
 local ok,reason=initialize_native()
+native.reason=reason
 report(reason)
 runtime.loading=false
 if ok then report('Loaded. Menu: '..(ui.menu_path or 'unavailable')..'. Status in console.') end
@@ -872,5 +946,9 @@ function __shutdown()
     native.ready = false
 end
 events.presentQueue:Add(guarded('frame',update))
+events.presentQueue:Add(guarded('menu: layout',function()
+    if ui.arrange and (not gui.IsVisible or gui.IsVisible()) then ui.arrange() end
+end))
 guarded('initialization',initialize)()
+if ui.arrange then ui.arrange() end
 return {encode=encode,decode=decode,compile=compile,apply=apply,preview=preview_at,clock=clock_utc,compose=compose_name,undercover=set_undercover,base=base_name}
